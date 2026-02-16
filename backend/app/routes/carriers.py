@@ -4,6 +4,9 @@ from app.services.spec_engine import SpecEngine
 from app.utils.file_handler import save_upload_file
 from app.database import get_database
 from bson import ObjectId
+from app.services.spec_engine import SpecEngine
+import shutil
+import os
 
 router = APIRouter(prefix="/api/carriers", tags=["carriers"])
 
@@ -89,3 +92,44 @@ async def delete_carrier(carrier_id: str):
         "success": True,
         "message": "Carrier deleted successfully"
     }
+
+spec_engine = SpecEngine()
+
+
+@router.post("/carriers/{carrier_name}/rollback/{version}")
+async def rollback_carrier_rules(carrier_name: str, version: int):
+    return await spec_engine.rollback_to_version(carrier_name, version)
+
+@router.get("/carriers/{carrier_name}/versions")
+async def list_carrier_versions(carrier_name: str):
+    return await spec_engine.list_versions(carrier_name)
+
+@router.get("/carriers/{carrier_name}/compare/{v1}/{v2}")
+async def compare_rule_versions(carrier_name: str, v1: int, v2: int):
+    return await spec_engine.compare_versions(carrier_name, v1, v2)
+
+@router.post("/carriers/{carrier_name}/simulate/{v1}/{v2}")
+async def simulate_validation(
+    carrier_name: str,
+    v1: int,
+    v2: int,
+    file: UploadFile = File(...)
+):
+    # Save uploaded file temporarily
+    temp_path = f"temp_{file.filename}"
+
+    with open(temp_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    result = await spec_engine.simulate_validation(
+        carrier_name,
+        v1,
+        v2,
+        temp_path
+    )
+
+    os.remove(temp_path)
+
+    return result
+
+

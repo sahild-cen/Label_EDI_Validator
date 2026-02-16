@@ -5,6 +5,13 @@ import pytesseract
 from typing import Dict, Any, List
 from app.models.validation import ValidationError
 
+# 🔥 ADD THIS
+pytesseract.pytesseract.tesseract_cmd = r"C:\Users\sahild\AppData\Local\Programs\Tesseract-OCR"
+
+
+from typing import Dict, Any, List
+from app.models.validation import ValidationError
+
 try:
     from pyzbar import pyzbar
 except Exception:
@@ -30,16 +37,22 @@ class LabelValidator:
         barcodes = self._detect_barcodes(img)
         layout_blocks = self._detect_layout_blocks(img)
 
-        field_errors, field_score = self._validate_fields(text_content, barcodes)
-        barcode_errors, barcode_score = self._validate_barcode(barcodes)
-        layout_errors, layout_score = self._validate_layout(layout_blocks)
+        field_errors, field_earned, field_total, field_breakdown = self._validate_fields(text_content, barcodes)
+        barcode_errors, barcode_earned, barcode_total, barcode_breakdown = self._validate_barcode(barcodes)
+        layout_errors, layout_earned, layout_total, layout_breakdown = self._validate_layout(layout_blocks)
+
 
         errors.extend(field_errors)
         errors.extend(barcode_errors)
         errors.extend(layout_errors)
 
-        compliance_score = field_score + barcode_score + layout_score
-        compliance_score = round(min(compliance_score, 1.0), 2)
+        total_possible = field_total + barcode_total + layout_total
+        total_earned = field_earned + barcode_earned + layout_earned
+
+        if total_possible > 0:
+            compliance_score = round(total_earned / total_possible, 2)
+        else:
+            compliance_score = 0.0
 
         status = "PASS" if not errors else "FAIL"
 
@@ -56,8 +69,7 @@ class LabelValidator:
 
     def _load_image(self, image_data: bytes):
         nparr = np.frombuffer(image_data, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        return img
+        return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
     def _extract_text(self, img) -> str:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -96,71 +108,58 @@ class LabelValidator:
 
     def _validate_fields(self, text: str, barcodes: list):
         errors = []
-        score = 0.0
+        earned_weight = 0.0
+        total_weight = 0.0
+        breakdown = {}
 
         fields = self.rules.get("fields", {})
 
         for field_name, rule in fields.items():
             weight = rule.get("weight", 0.1)
+            total_weight += weight
+
+            matched = False
 
             if field_name == "tracking_number":
-                matched = False
-
-                # Validate via barcode if required
                 if rule.get("must_match_barcode") and barcodes:
                     barcode_value = barcodes[0]["data"]
-                    if re.match(rule["pattern"], barcode_value):
+                    if re.match(rule.get("pattern", ""), barcode_value):
                         matched = True
 
-                # Also check OCR text
-                if not matched:
-                    if re.search(rule["pattern"], text):
-                        matched = True
-
-                if not matched and rule.get("required"):
-                    errors.append(ValidationError(
-                        field="tracking_number",
-                        expected="Valid tracking number format",
-                        actual="Not found or invalid format",
-                        description="Tracking number missing or invalid."
-                    ))
-                else:
-                    score += weight
+                if not matched and re.search(rule.get("pattern", ""), text):
+                    matched = True
 
             elif field_name in ["sender_block", "recipient_block"]:
                 min_lines = rule.get("min_lines", 3)
                 blocks = text.split("\n\n")
 
-                valid_block = False
                 for block in blocks:
                     lines = [l for l in block.split("\n") if l.strip()]
                     if len(lines) >= min_lines:
-                        valid_block = True
+                        matched = True
                         break
-
-                if not valid_block and rule.get("required"):
-                    errors.append(ValidationError(
-                        field=field_name,
-                        expected=f"Block with at least {min_lines} lines",
-                        actual="Block not found",
-                        description=f"{field_name} structure invalid."
-                    ))
-                else:
-                    score += weight
 
             else:
                 pattern = rule.get("pattern")
                 if pattern and re.search(pattern, text):
-                    score += weight
-                elif rule.get("required"):
-                    errors.append(ValidationError(
-                        field=field_name,
-                        expected="Pattern match",
-                        actual="Not found",
-                        description=f"{field_name} missing."
-                    ))
+                    matched = True
 
-        return errors, score
+            breakdown[field_name] = {
+                "passed": matched,
+                "weight": weight
+            }
+
+            if matched:
+                earned_weight += weight
+            elif rule.get("required"):
+                errors.append(ValidationError(
+                    field=field_name,
+                    expected="Valid pattern",
+                    actual="Not found or invalid",
+                    description=f"{field_name} validation failed."
+                ))
+
+        return errors, earned_weight, total_weight, breakdown
 
     # ===============================
     # BARCODE VALIDATION
@@ -168,12 +167,18 @@ class LabelValidator:
 
     def _validate_barcode(self, barcodes):
         errors = []
-        score = 0.0
+        earned_weight = 0.0
+        total_weight = 0.0
+        breakdown = {}
 
         rule = self.rules.get("barcode", {})
         weight = rule.get("weight", 0.1)
+        total_weight += weight
+
+        passed = True
 
         if rule.get("required") and not barcodes:
+            passed = False
             errors.append(ValidationError(
                 field="barcode",
                 expected="At least one barcode",
@@ -181,9 +186,15 @@ class LabelValidator:
                 description="Barcode missing."
             ))
         else:
-            score += weight
+            earned_weight += weight
 
-        return errors, score
+        breakdown["barcode"] = {
+            "passed": passed,
+            "weight": weight
+        }
+
+        return errors, earned_weight, total_weight, breakdown
+
 
     # ===============================
     # LAYOUT VALIDATION
@@ -191,14 +202,18 @@ class LabelValidator:
 
     def _validate_layout(self, layout_blocks):
         errors = []
-        score = 0.0
+        earned_weight = 0.0
+        total_weight = 0.0
+        breakdown = {}
 
         rule = self.rules.get("layout", {})
         weight = rule.get("weight", 0.05)
+        total_weight += weight
 
         min_blocks = rule.get("min_blocks", 0)
+        passed = len(layout_blocks) >= min_blocks
 
-        if len(layout_blocks) < min_blocks:
+        if not passed:
             errors.append(ValidationError(
                 field="layout",
                 expected=f"At least {min_blocks} layout blocks",
@@ -206,9 +221,15 @@ class LabelValidator:
                 description="Label layout incomplete."
             ))
         else:
-            score += weight
+            earned_weight += weight
 
-        return errors, score
+        breakdown["layout"] = {
+            "passed": passed,
+            "weight": weight
+        }
+
+        return errors, earned_weight, total_weight, breakdown
+
 
     # ===============================
     # FAILURE RESPONSE

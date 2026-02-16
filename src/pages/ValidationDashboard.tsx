@@ -37,7 +37,7 @@ export default function ValidationDashboard() {
     try {
       const response = await api.validateLabel(selectedCarrier, labelFile, isZpl);
       if (response.success) {
-        setLabelResult(response.validation);
+        setLabelResult(response);
       }
     } catch (error) {
       console.error('Validation failed:', error);
@@ -153,7 +153,9 @@ export default function ValidationDashboard() {
                       </span>
                     </div>
                     <p className="text-sm">
-                      Compliance Score: {(labelResult.compliance_score * 100).toFixed(1)}%
+                      {labelResult.status === 'PASS'
+                        ? 'Label is valid and ready to use.'
+                        : `${labelResult.errors.length} issue(s) found. Please review below.`}
                     </p>
                   </div>
 

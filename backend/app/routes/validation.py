@@ -32,12 +32,34 @@ async def validate_label(
     if not carrier:
         raise HTTPException(status_code=404, detail="Carrier not found")
 
-    label_rules = carrier.get("label_rules", {})
+    rules = carrier.get("rules", [])
+
+    if not rules:
+        raise HTTPException(
+            status_code=400,
+            detail="No rule versions found for this carrier. Upload specs first."
+        )
+
+    # Find active rule
+    active_rule = next(
+        (r for r in rules if r.get("status") == "active"),
+        None
+    )
+
+    if not active_rule:
+        raise HTTPException(
+            status_code=400,
+            detail="No active rule version found."
+        )
+
+    label_rules = active_rule.get("label_rules", {})
+
     if not label_rules:
         raise HTTPException(
             status_code=400,
-            detail="No label rules found for this carrier. Upload specs first."
+            detail="No label rules found in active version."
         )
+
 
     # -------------------------
     # Save uploaded file
@@ -120,7 +142,15 @@ async def validate_edi(
     if not carrier:
         raise HTTPException(status_code=404, detail="Carrier not found")
 
-    edi_rules = carrier.get("edi_rules", {})
+    rules = carrier.get("rules", [])
+
+    active_rule = next(
+        (r for r in rules if r.get("status") == "active"),
+        None
+    )
+
+    edi_rules = active_rule.get("edi_rules", {}) if active_rule else {}
+
     if not edi_rules:
         raise HTTPException(
             status_code=400,
