@@ -58,10 +58,10 @@ cp .env.example .env
 ```
 
 Now edit `backend/.env` and add your Supabase credentials:
-```env
+<!-- ```env
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your-anon-key-here
-LABELARY_API_URL=http://api.labelary.com/v1/printers/8dpmm/labels/4x6/0/
+LABELARY_API_URL=http://api.labelary.com/v1/printers/8dpmm/labels/4x6/0/ -->
 ```
 
 ### 3. Setup Frontend (2 steps)

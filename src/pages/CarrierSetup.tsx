@@ -174,24 +174,22 @@ export default function CarrierSetup() {
             ) : (
               <div className="space-y-3">
                 {carriers.map((carrier) => (
-                  <div
-                    key={carrier.id}
-                    className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-blue-500 transition-colors"
-                  >
-                    <div>
-                      <h3 className="font-medium text-gray-900">{carrier.name}</h3>
-                      <p className="text-sm text-gray-500">
-                        Added {new Date(carrier.created_at).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleDelete(carrier.id, carrier.name)}
-                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
+                <div
+                  key={carrier._id}
+                  className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-blue-500 transition-colors"
+                >
+                  <div>
+                    <h3 className="font-medium text-gray-900">{carrier.carrier}</h3>
                   </div>
-                ))}
+
+                  <button
+                    onClick={() => handleDelete(carrier._id, carrier.carrier)}
+                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                </div>
+              ))}
               </div>
             )}
           </div>

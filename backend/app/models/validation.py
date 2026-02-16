@@ -8,6 +8,7 @@ class ValidationError(BaseModel):
     expected: str
     actual: str
     description: str
+    location: Optional[str] = None
 
 
 class LabelValidationResponse(BaseModel):

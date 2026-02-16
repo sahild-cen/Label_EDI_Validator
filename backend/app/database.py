@@ -1,10 +1,9 @@
-from supabase import create_client, Client
-from app.config import get_settings
+from motor.motor_asyncio import AsyncIOMotorClient
 
-settings = get_settings()
+MONGO_URI = "mongodb://localhost:27017"
 
-supabase: Client = create_client(settings.supabase_url, settings.supabase_key)
+client = AsyncIOMotorClient(MONGO_URI)
+db = client["label_edi_validator"]
 
-
-def get_supabase() -> Client:
-    return supabase
+def get_database():
+    return db

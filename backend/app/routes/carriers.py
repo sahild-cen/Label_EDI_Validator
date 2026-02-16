@@ -2,8 +2,8 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Optional
 from app.services.spec_engine import SpecEngine
 from app.utils.file_handler import save_upload_file
-from app.database import get_supabase
-from app.models.carrier import CarrierResponse
+from app.database import get_database
+from bson import ObjectId
 
 router = APIRouter(prefix="/api/carriers", tags=["carriers"])
 
@@ -40,36 +40,50 @@ async def upload_carrier_spec(
 
 @router.get("/list")
 async def list_carriers():
-    db = get_supabase()
-    response = db.table("carriers").select("*").execute()
+    db = get_database()
+    carriers = await db.carriers.find({}, {"_id": 1, "carrier": 1}).to_list(length=None)
+
+    # Convert ObjectId to string
+    for carrier in carriers:
+        carrier["_id"] = str(carrier["_id"])
 
     return {
         "success": True,
-        "carriers": response.data
+        "carriers": carriers
     }
 
 
 @router.get("/{carrier_id}")
 async def get_carrier(carrier_id: str):
-    db = get_supabase()
-    carrier_response = db.table("carriers").select("*").eq("id", carrier_id).maybeSingle().execute()
+    db = get_database()
 
-    if not carrier_response.data:
+    try:
+        carrier = await db.carriers.find_one({"_id": ObjectId(carrier_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid carrier ID")
+
+    if not carrier:
         raise HTTPException(status_code=404, detail="Carrier not found")
 
-    spec_response = db.table("carrier_specs").select("*").eq("carrier_id", carrier_id).maybeSingle().execute()
+    carrier["_id"] = str(carrier["_id"])
 
     return {
         "success": True,
-        "carrier": carrier_response.data,
-        "specs": spec_response.data if spec_response.data else None
+        "carrier": carrier
     }
 
 
 @router.delete("/{carrier_id}")
 async def delete_carrier(carrier_id: str):
-    db = get_supabase()
-    response = db.table("carriers").delete().eq("id", carrier_id).execute()
+    db = get_database()
+
+    try:
+        result = await db.carriers.delete_one({"_id": ObjectId(carrier_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid carrier ID")
+
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Carrier not found")
 
     return {
         "success": True,

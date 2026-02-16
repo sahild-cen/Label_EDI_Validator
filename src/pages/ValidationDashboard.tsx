@@ -87,8 +87,8 @@ export default function ValidationDashboard() {
           >
             <option value="">Choose a carrier...</option>
             {carriers.map((carrier) => (
-              <option key={carrier.id} value={carrier.id}>
-                {carrier.name}
+              <option key={carrier._id} value={carrier._id}>
+                {carrier.carrier}
               </option>
             ))}
           </select>
@@ -114,7 +114,7 @@ export default function ValidationDashboard() {
                 />
               </div>
 
-              <div className="flex items-center gap-2">
+              {/* <div className="flex items-center gap-2">
                 <input
                   type="checkbox"
                   id="isZpl"
@@ -125,7 +125,7 @@ export default function ValidationDashboard() {
                 <label htmlFor="isZpl" className="text-sm text-gray-700">
                   This is a ZPL file
                 </label>
-              </div>
+              </div> */}
 
               <button
                 onClick={handleValidateLabel}

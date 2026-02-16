@@ -1,10 +1,8 @@
 const API_BASE_URL = 'http://localhost:8000';
 
 export interface Carrier {
-  id: string;
-  name: string;
-  created_at: string;
-  updated_at: string;
+  _id: string;
+  carrier: string;
 }
 
 export interface ValidationError {
