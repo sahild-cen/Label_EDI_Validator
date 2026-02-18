@@ -37,7 +37,7 @@ export default function ValidationDashboard() {
     try {
       const response = await api.validateLabel(selectedCarrier, labelFile, isZpl);
       if (response.success) {
-        setLabelResult(response);
+        setLabelResult(response.validation);   // ✅ FIXED
       }
     } catch (error) {
       console.error('Validation failed:', error);
@@ -45,6 +45,7 @@ export default function ValidationDashboard() {
       setValidating(false);
     }
   };
+
 
   const handleValidateEDI = async () => {
     if (!selectedCarrier || !ediFile) return;
@@ -159,7 +160,7 @@ export default function ValidationDashboard() {
                     </p>
                   </div>
 
-                  {labelResult.errors.length > 0 && (
+                  {labelResult.errors && labelResult.errors.length > 0 && (
                     <div>
                       <h3 className="font-medium mb-2">Errors Found:</h3>
                       <div className="space-y-2">
@@ -256,7 +257,7 @@ export default function ValidationDashboard() {
                     </p>
                   </div>
 
-                  {ediResult.errors.length > 0 && (
+                  {ediResult.errors && ediResult.errors.length > 0 && (
                     <div>
                       <h3 className="font-medium mb-2">Errors Found:</h3>
                       <div className="space-y-2">

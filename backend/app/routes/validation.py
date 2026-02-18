@@ -93,13 +93,14 @@ async def validate_label(
 
     # PDF (image-based)
     elif file_ext == ".pdf":
-        from app.utils.pdf_utils import convert_pdf_to_image_bytes
+        # Read PDF directly as bytes (image-based PDF)
+        image_bytes = read_file_content(label_path)
 
-        image_bytes = convert_pdf_to_image_bytes(label_path)
         result = await validator.validate(
             image_bytes,
             is_zpl=False
         )
+
 
     else:
         raise HTTPException(

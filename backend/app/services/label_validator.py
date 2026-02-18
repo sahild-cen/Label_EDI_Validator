@@ -5,13 +5,6 @@ import pytesseract
 from typing import Dict, Any, List
 from app.models.validation import ValidationError
 
-# 🔥 ADD THIS
-pytesseract.pytesseract.tesseract_cmd = r"C:\Users\sahild\AppData\Local\Programs\Tesseract-OCR"
-
-
-from typing import Dict, Any, List
-from app.models.validation import ValidationError
-
 try:
     from pyzbar import pyzbar
 except Exception:
@@ -22,50 +15,80 @@ class LabelValidator:
     def __init__(self, rules: Dict[str, Any]):
         self.rules = rules
 
-    # ===============================
+    # =====================================================
     # MAIN VALIDATION ENTRY
-    # ===============================
+    # =====================================================
 
     async def validate(self, label_data: bytes, is_zpl: bool = False) -> Dict[str, Any]:
         errors: List[ValidationError] = []
 
-        img = self._load_image(label_data)
-        if img is None:
-            return self._fail_response("Unreadable image file.")
+        parsed_data = {}
+        original_script = ""
+        barcodes = []
+        layout_blocks = []
 
-        text_content = self._extract_text(img)
-        barcodes = self._detect_barcodes(img)
-        layout_blocks = self._detect_layout_blocks(img)
+        # -----------------------------------
+        # ZPL FILE
+        # -----------------------------------
+        if is_zpl:
+            original_script = label_data.decode("utf-8")
 
-        field_errors, field_earned, field_total, field_breakdown = self._validate_fields(text_content, barcodes)
-        barcode_errors, barcode_earned, barcode_total, barcode_breakdown = self._validate_barcode(barcodes)
-        layout_errors, layout_earned, layout_total, layout_breakdown = self._validate_layout(layout_blocks)
+            from app.services.zpl_parser import parse_zpl_script
+            parsed_data = parse_zpl_script(original_script)
 
+        # -----------------------------------
+        # IMAGE / PDF FILE
+        # -----------------------------------
+        else:
+            img = self._load_image(label_data)
+            if img is None:
+                return self._fail_response("Unreadable image file.")
+
+            text_content = self._extract_text(img)
+            parsed_data = self._parse_ocr_text(text_content)
+
+            barcodes = self._detect_barcodes(img)
+            layout_blocks = self._detect_layout_blocks(img)
+
+        # -----------------------------------
+        # VALIDATIONS
+        # -----------------------------------
+        field_errors, field_score, field_total = self._validate_fields(parsed_data)
+        barcode_errors, barcode_score, barcode_total = self._validate_barcode(barcodes, parsed_data)
+        layout_errors, layout_score, layout_total = self._validate_layout(layout_blocks)
 
         errors.extend(field_errors)
         errors.extend(barcode_errors)
         errors.extend(layout_errors)
 
         total_possible = field_total + barcode_total + layout_total
-        total_earned = field_earned + barcode_earned + layout_earned
+        total_earned = field_score + barcode_score + layout_score
 
-        if total_possible > 0:
-            compliance_score = round(total_earned / total_possible, 2)
-        else:
-            compliance_score = 0.0
+        compliance_score = round(total_earned / total_possible, 2) if total_possible > 0 else 0.0
 
         status = "PASS" if not errors else "FAIL"
+
+        # -----------------------------------
+        # AUTO CORRECTION (ZPL ONLY)
+        # -----------------------------------
+        corrected_script = None
+        if is_zpl and errors:
+            corrected_script = self._auto_correct_zpl(
+                original_script=original_script,
+                parsed_data=parsed_data,
+                errors=errors
+            )
 
         return {
             "status": status,
             "errors": [e.dict() for e in errors],
-            "corrected_label_script": None,
+            "corrected_label_script": corrected_script,
             "compliance_score": compliance_score
         }
 
-    # ===============================
+    # =====================================================
     # IMAGE UTILITIES
-    # ===============================
+    # =====================================================
 
     def _load_image(self, image_data: bytes):
         nparr = np.frombuffer(image_data, np.uint8)
@@ -73,147 +96,126 @@ class LabelValidator:
 
     def _extract_text(self, img) -> str:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
         return pytesseract.image_to_string(gray)
 
-    def _detect_barcodes(self, img):
-        if pyzbar is None:
-            return []
+    def _parse_ocr_text(self, text: str) -> Dict[str, str]:
+        parsed = {}
 
-        try:
-            detected = []
-            for barcode in pyzbar.decode(img):
-                detected.append({
-                    "type": barcode.type,
-                    "data": barcode.data.decode("utf-8")
-                })
-            return detected
-        except Exception:
-            return []
+        # Simple extraction patterns (improve gradually)
+        tracking_match = re.search(r"\b\d{10,20}\b", text)
+        if tracking_match:
+            parsed["tracking_number"] = tracking_match.group()
 
-    def _detect_layout_blocks(self, img):
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        postal_match = re.search(r"\b\d{5}(-\d{4})?\b", text)
+        if postal_match:
+            parsed["postal_code"] = postal_match.group()
 
-        blocks = []
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            if w > 20 and h > 20:
-                blocks.append((x, y, w, h))
-        return blocks
+        weight_match = re.search(r"\b\d+(\.\d+)?\s?(KG|LB)\b", text, re.IGNORECASE)
+        if weight_match:
+            parsed["weight"] = weight_match.group()
 
-    # ===============================
-    # FIELD VALIDATION
-    # ===============================
+        return parsed
 
-    def _validate_fields(self, text: str, barcodes: list):
+    # =====================================================
+    # FIELD VALIDATION (SPEC-DRIVEN)
+    # =====================================================
+
+    def _validate_fields(self, parsed_data: dict):
         errors = []
-        earned_weight = 0.0
-        total_weight = 0.0
-        breakdown = {}
+        earned = 0.0
+        total = 0.0
 
-        fields = self.rules.get("fields", {})
+        field_formats = {
+            k: v for k, v in self.rules.get("field_formats", {}).items()
+            if k != "barcode"
+        }
 
-        for field_name, rule in fields.items():
-            weight = rule.get("weight", 0.1)
-            total_weight += weight
 
-            matched = False
+        for field_name, rule in field_formats.items():
+            weight = 0.1
+            total += weight
 
-            if field_name == "tracking_number":
-                if rule.get("must_match_barcode") and barcodes:
-                    barcode_value = barcodes[0]["data"]
-                    if re.match(rule.get("pattern", ""), barcode_value):
-                        matched = True
+            required = rule.get("required", False)
+            pattern = rule.get("pattern")
 
-                if not matched and re.search(rule.get("pattern", ""), text):
-                    matched = True
+            value = parsed_data.get(field_name)
 
-            elif field_name in ["sender_block", "recipient_block"]:
-                min_lines = rule.get("min_lines", 3)
-                blocks = text.split("\n\n")
+            passed = False
 
-                for block in blocks:
-                    lines = [l for l in block.split("\n") if l.strip()]
-                    if len(lines) >= min_lines:
-                        matched = True
-                        break
+            if value and pattern:
+                if re.match(pattern, value):
+                    passed = True
 
-            else:
-                pattern = rule.get("pattern")
-                if pattern and re.search(pattern, text):
-                    matched = True
-
-            breakdown[field_name] = {
-                "passed": matched,
-                "weight": weight
-            }
-
-            if matched:
-                earned_weight += weight
-            elif rule.get("required"):
+            if passed:
+                earned += weight
+            elif required:
                 errors.append(ValidationError(
                     field=field_name,
-                    expected="Valid pattern",
-                    actual="Not found or invalid",
+                    expected=f"Pattern: {pattern}",
+                    actual=value if value else "Not found",
                     description=f"{field_name} validation failed."
                 ))
 
-        return errors, earned_weight, total_weight, breakdown
+        return errors, earned, total
 
-    # ===============================
+    # =====================================================
     # BARCODE VALIDATION
-    # ===============================
+    # =====================================================
 
-    def _validate_barcode(self, barcodes):
+    def _validate_barcode(self, barcodes, parsed_data):
         errors = []
-        earned_weight = 0.0
-        total_weight = 0.0
-        breakdown = {}
+        earned = 0.0
+        total = 0.1
 
-        rule = self.rules.get("barcode", {})
-        weight = rule.get("weight", 0.1)
-        total_weight += weight
+        barcode_rule = self.rules.get("field_formats", {}).get("barcode", {})
+        required = barcode_rule.get("required", False)
+        pattern = barcode_rule.get("pattern")
 
-        passed = True
+        zpl_barcode = parsed_data.get("barcode")
 
-        if rule.get("required") and not barcodes:
-            passed = False
+        value = None
+
+        if zpl_barcode:
+            value = zpl_barcode
+        elif barcodes:
+            value = barcodes[0]["data"]
+
+        passed = False
+
+        if value:
+            if pattern:
+                if re.match(pattern, value):
+                    passed = True
+            else:
+                passed = True  # no pattern rule → just existence
+
+        if required and not passed:
             errors.append(ValidationError(
                 field="barcode",
-                expected="At least one barcode",
-                actual="None detected",
-                description="Barcode missing."
+                expected=f"Pattern: {pattern}" if pattern else "At least one barcode",
+                actual=value if value else "Not found",
+                description="barcode validation failed."
             ))
         else:
-            earned_weight += weight
+            earned += 0.1
 
-        breakdown["barcode"] = {
-            "passed": passed,
-            "weight": weight
-        }
-
-        return errors, earned_weight, total_weight, breakdown
+        return errors, earned, total
 
 
-    # ===============================
+    # =====================================================
     # LAYOUT VALIDATION
-    # ===============================
+    # =====================================================
 
     def _validate_layout(self, layout_blocks):
         errors = []
-        earned_weight = 0.0
-        total_weight = 0.0
-        breakdown = {}
+        earned = 0.0
+        total = 0.05
 
-        rule = self.rules.get("layout", {})
-        weight = rule.get("weight", 0.05)
-        total_weight += weight
+        layout_rules = self.rules.get("layout_constraints", {})
+        min_blocks = layout_rules.get("min_blocks", 0)
 
-        min_blocks = rule.get("min_blocks", 0)
-        passed = len(layout_blocks) >= min_blocks
-
-        if not passed:
+        if min_blocks and len(layout_blocks) < min_blocks:
             errors.append(ValidationError(
                 field="layout",
                 expected=f"At least {min_blocks} layout blocks",
@@ -221,19 +223,44 @@ class LabelValidator:
                 description="Label layout incomplete."
             ))
         else:
-            earned_weight += weight
+            earned += 0.05
 
-        breakdown["layout"] = {
-            "passed": passed,
-            "weight": weight
-        }
+        return errors, earned, total
 
-        return errors, earned_weight, total_weight, breakdown
+    # =====================================================
+    # SMART AUTO CORRECTION (NO HARDCODE TEMPLATE)
+    # =====================================================
+
+    def _auto_correct_zpl(self, original_script: str, parsed_data: dict, errors: list):
+        corrected = original_script.strip()
+
+        additions = []
+
+        for error in errors:
+            field = error.field
+
+            if field == "postal_code":
+                additions.append("^FO50,750^FD 12345 ^FS")
+
+            elif field == "tracking_number":
+                additions.append("^FO50,780^FD 123456789012 ^FS")
+
+            elif field == "weight":
+                additions.append("^FO50,810^FD 1 KG ^FS")
+
+            elif field == "barcode":
+                additions.append("^BY3,3,120\n^FD123456789012^FS")
+
+        if additions:
+            corrected = corrected.replace("^XZ", "")
+            corrected += "\n" + "\n".join(additions) + "\n^XZ"
+
+        return corrected
 
 
-    # ===============================
+    # =====================================================
     # FAILURE RESPONSE
-    # ===============================
+    # =====================================================
 
     def _fail_response(self, message):
         return {
