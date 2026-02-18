@@ -47,8 +47,8 @@ class LabelValidator:
             text_content = self._extract_text(img)
             parsed_data = self._parse_ocr_text(text_content)
 
-            barcodes = self._detect_barcodes(img)
-            layout_blocks = self._detect_layout_blocks(img)
+            barcodes = self.detect_barcodes(img)
+            layout_blocks = self.detect_layout_blocks(img)
 
         # -----------------------------------
         # VALIDATIONS
